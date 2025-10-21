@@ -1,238 +1,124 @@
-"""
-Simple Supervisor Agent following KISS, DRY, SOLID principles.
-Pure routing with workflow delegation - no complex multi-step logic here.
-"""
+# agents/supervisor_agent.py
+import json
+import re
+from typing import Optional, Dict, Any, List
 
-from typing import Optional
-from agents.base_agent import BaseAgent, AgentResponse
-from core.factory import get_workflow_engine
-from core.routing_models import RoutingDecision, AgentType
+# Core components
+from core.llm_provider import get_llm
+from core.state import AgentGraphState
+from core.routing_models import AgentType # Use the Enum for type safety
+from core.constants import SUPERVISOR_ROUTING_CONFIDENCE_THRESHOLD
+from core.utils import fetch_customer_data, _extract_customer_ids_from_text # Import customer data utils
+from langchain_core.messages import AIMessage, HumanMessage
+
+# --- Node Functions ---
+
+def supervisor_router_node(state: AgentGraphState) -> Dict[str, Any]:
+    """Determines intent and routes to the appropriate agent or handles ambiguity."""
+    print("--- Supervisor Router Node ---")
+    query = state["query"]
+    context_str = state.get("context_str", "No history.")
+    messages = list(state.get("messages", []))
+    llm = get_llm(temperature=0.0) # Use 0 temp for deterministic routing
+
+    # Simple inline prompt for routing
+    routing_prompt = f"""Analyze the user query below and determine the primary intent and whether it requires customer-specific data.
+
+Conversation History (for context):
+{context_str}
+
+User Query: "{query}"
+
+Available Intents:
+- SQL_AGENT: For queries about existing loan details (EMI, balance, status, history, specific customer info). Needs customer data if about 'my' loan or specific IDs.
+- POLICY_GURU: For questions about rules, eligibility, policies, documents required. Might need customer data for personalized eligibility.
+- CALCULATOR: For hypothetical calculations, 'what-if' scenarios (prepayment impact, new loan EMI). Might need customer data for prepayment sims.
+- AMBIGUOUS: If the query is unclear, too broad, a greeting, or not related to loans.
+
+Does the query require customer-specific data (e.g., refers to 'my loan', customer ID)? Answer true/false.
+
+Provide your response ONLY in JSON format like this:
+{{
+  "reasoning": "Brief explanation for your choice.",
+  "intent": "SQL_AGENT | POLICY_GURU | CALCULATOR | AMBIGUOUS",
+  "needs_customer_data": true | false,
+  "confidence": float (0.0 to 1.0) // Your confidence in the intent classification
+}}"""
+
+    try:
+        response = llm.invoke(routing_prompt)
+        # Clean potential markdown backticks
+        cleaned_response = response.content.strip().strip('`').strip()
+        # Find JSON block
+        json_match = re.search(r"\{.*\}", cleaned_response, re.DOTALL)
+        if not json_match:
+             raise ValueError("LLM did not return a JSON object for routing.")
+        routing_decision = json.loads(json_match.group(0))
+
+        intent = routing_decision.get("intent", "AMBIGUOUS").upper()
+        needs_data = routing_decision.get("needs_customer_data", False)
+        confidence = routing_decision.get("confidence", 0.0)
+        reasoning = routing_decision.get("reasoning", "N/A")
+
+        print(f"Supervisor LLM Routing:")
+        print(f"  Intent: {intent}, Confidence: {confidence:.2f}, Needs Data: {needs_data}")
+        print(f"  Reasoning: {reasoning}")
+
+        # --- Decision Logic ---
+        if intent == "AMBIGUOUS" or confidence < SUPERVISOR_ROUTING_CONFIDENCE_THRESHOLD:
+            print("Routing: Ambiguous or low confidence -> AMBIGUOUS")
+            # Ask for clarification directly
+            clarification_message = f"I'm not quite sure how to help with '{query}'. Could you please specify if you're asking about existing loan details, a calculation, or general policy?"
+            messages.append(AIMessage(content=clarification_message))
+            return {"messages": messages, "intent": "AMBIGUOUS", "final_answer": clarification_message} # End here
+        else:
+            # Check for customer IDs and set flag/data for next node
+            customer_ids = _extract_customer_ids_from_text(query) or _extract_customer_ids_from_text(context_str or "")
+            print(f"Supervisor: Extracted Customer IDs: {customer_ids}")
+            return {
+                "intent": intent,
+                "needs_customer_data": needs_data,
+                "customer_ids": customer_ids if needs_data else [], # Pass IDs if data needed
+                "messages": messages # Pass messages along
+            }
+
+    except Exception as e:
+        print(f"❌ Error during Supervisor routing: {e}")
+        error_msg = f"Sorry, I had trouble understanding your request: '{query}'. Can you rephrase?"
+        messages.append(AIMessage(content=error_msg))
+        # Route to end with error message
+        return {"messages": messages, "intent": "AMBIGUOUS", "final_answer": error_msg}
 
 
-class Supervisor(BaseAgent):
-    """Simple supervisor - pure routing with workflow delegation following KISS principle."""
+def fetch_data_node(state: AgentGraphState) -> Dict[str, Any]:
+    """Fetches customer data if needed based on supervisor routing."""
+    print("--- Fetch Data Node ---")
+    needs_data = state.get("needs_customer_data", False)
+    customer_ids = state.get("customer_ids", [])
+    customer_data = None # Default to None
 
-    def __init__(self):
-        super().__init__("supervisor", temperature=0.1)
-        self.workflow_engine = get_workflow_engine()
-        self.structured_llm = self.llm.with_structured_output(RoutingDecision)
+    if needs_data and customer_ids:
+        print(f"Fetching data for customer IDs: {customer_ids}")
+        customer_data = fetch_customer_data(customer_ids) # Use util function
+        if not customer_data:
+            print("Fetch Data Node: No data found for specified customer IDs.")
+            # Decide how to handle this - maybe route to ambiguous/clarification?
+            # For now, proceed but agent node will handle lack of data.
+    elif needs_data and not customer_ids:
+        print("Fetch Data Node: 'needs_customer_data' is true, but no customer IDs found.")
+        # This could also trigger clarification
+        pass # Let agent node handle missing data
+    else:
+        print("Fetch Data Node: No customer data needed.")
 
-    def process(
-        self,
-        query: str,
-        context: Optional[str] = None,
-        session_id: Optional[str] = None,
-    ) -> AgentResponse:
-        """Simple routing with comprehensive decision-making and retry logic - KISS principle"""
-        try:
-            # Single LLM call for complete routing decision
-            routing_decision = self._intelligent_route(query, context)
+    return {"customer_data": customer_data} # Update state with fetched data (or None)
 
-            print(
-                f"🧠 Supervisor: {routing_decision.agent.value} (confidence: {routing_decision.confidence:.2f})"
-            )
-            print(f"🎯 Reasoning: {routing_decision.reasoning}")
-            print(f"📊 Customer data needed: {routing_decision.needs_customer_data}")
 
-            # FALLBACK 1: Detect ambiguous queries (confidence < 0.5)
-            if routing_decision.confidence < 0.5:
-                print("⚠️ Ambiguous query detected - requesting clarification")
-                return self._handle_ambiguous_query(query, routing_decision, context)
-
-            # FALLBACK 2: Handle low confidence (0.5 <= confidence < 0.7)
-            if routing_decision.confidence < 0.7:
-                print("⚠️ Low confidence routing - checking for multi-domain query")
-                multi_domain_result = self._detect_multi_domain_query(query, context)
-                if multi_domain_result["is_multi_domain"]:
-                    print(
-                        f"🔀 Multi-domain query detected: {multi_domain_result['domains']}"
-                    )
-                    return self._handle_multi_domain_query(
-                        query, multi_domain_result, context, session_id
-                    )
-                # Low confidence, not multi-domain - request clarification
-                return self._handle_ambiguous_query(query, routing_decision, context)
-
-            # Clean delegation with comprehensive routing info - pass context and session_id
-            response = self.workflow_engine.execute_workflow(
-                query,
-                routing_decision.agent,
-                routing_decision.needs_customer_data,
-                context,
-                session_id,
-            )
-
-            # Check if Policy Guru needs query enhancement (fallback mechanism)
-            if (
-                routing_decision.agent == AgentType.POLICY_GURU
-                and response.metadata
-                and response.metadata.get("needs_query_enhancement")
-            ):
-
-                print(
-                    "🔄 Policy Guru needs query enhancement - retrying with enriched context"
-                )
-
-                # Enhance query with additional context
-                enhanced_query = self._enhance_query_with_context(
-                    query, context, session_id
-                )
-
-                # Retry with enhanced query
-                retry_response = self.workflow_engine.execute_workflow(
-                    enhanced_query,
-                    AgentType.POLICY_GURU,
-                    routing_decision.needs_customer_data,
-                    context,
-                    session_id,
-                    retry_count=1,
-                )
-
-                print(
-                    f"✅ Retry complete - fallback: {retry_response.metadata.get('is_fallback', False)}"
-                )
-                return retry_response
-
-            # Check if SQL Agent needs clarification (fallback mechanism)
-            if (
-                routing_decision.agent == AgentType.SQL_AGENT
-                and response.metadata
-                and response.metadata.get("sql_fallback_flag")
-            ):
-                print("🔄 SQL Agent needs clarification - returning guidance to user")
-                return response
-
-            return response
-
-        except Exception as e:
-            return self.handle_error(f"Supervisor error: {str(e)}")
-
-    def _enhance_query_with_context(
-        self, query: str, context: Optional[str], session_id: Optional[str]
-    ) -> str:
-        """Enhance query with additional context for retry attempts."""
-        enhancement_prompt = self.prompts["query_enhancement"].format(
-            query=query, context=context if context else "No conversation history"
-        )
-
-        try:
-            enhanced = self.llm.invoke(enhancement_prompt).content.strip()
-            print(f"📝 Enhanced query: {enhanced[:100]}...")
-            return enhanced
-        except:
-            # If enhancement fails, return original with context appended
-            if context:
-                return f"{query}\n\nAdditional Context: {context}"
-            return query
-
-    def _intelligent_route(
-        self, query: str, context: Optional[str] = None
-    ) -> RoutingDecision:
-        """Single LLM call for comprehensive routing decision - DRY principle"""
-        routing_prompt = self.prompts["intelligent_routing_prompt"]
-        full_prompt = f"{routing_prompt}\n\nUser Query: {query}\n{f'Available context: {context}' if context else 'No additional context available.'}"
-        return self.structured_llm.invoke(full_prompt)
-
-    def _handle_ambiguous_query(
-        self, query: str, routing_decision: RoutingDecision, context: Optional[str]
-    ) -> AgentResponse:
-        """Handle ambiguous queries by requesting clarification from user"""
-        clarification_prompt = self.prompts["ambiguous_query_clarification"]
-
-        formatted_prompt = clarification_prompt.format(
-            query=query,
-            reasoning=routing_decision.reasoning,
-            confidence=routing_decision.confidence,
-        )
-
-        response = self.llm.invoke(formatted_prompt).content
-
-        return AgentResponse(
-            answer=response,
-            metadata={
-                "requires_clarification": True,
-            },
-        )
-
-    def _detect_multi_domain_query(self, query: str, context: Optional[str]) -> dict:
-        """Detect if query spans multiple domains (SQL + Calculator + Policy)"""
-        detection_prompt = self.prompts["multi_domain_detection"]
-
-        formatted_prompt = detection_prompt.format(
-            query=query, context=context if context else "No context"
-        )
-
-        try:
-            response = self.llm.invoke(formatted_prompt).content
-            # Try to parse JSON response
-            import json
-
-            if "{" in response and "}" in response:
-                json_str = response[response.find("{") : response.rfind("}") + 1]
-                return json.loads(json_str)
-        except:
-            pass
-
-        # Default: not multi-domain
-        return {
-            "is_multi_domain": False,
-            "domains": [],
-            "reasoning": "Single domain query",
-        }
-
-    def _handle_multi_domain_query(
-        self,
-        query: str,
-        multi_domain_result: dict,
-        context: Optional[str],
-        session_id: Optional[str],
-    ) -> AgentResponse:
-        """Handle queries that span multiple domains by coordinating agents"""
-        domains = multi_domain_result.get("domains", [])
-
-        print(f"🔀 Processing multi-domain query across: {', '.join(domains)}")
-
-        # Execute each domain in sequence and combine results
-        results = []
-
-        for domain in domains:
-            try:
-                agent_type = AgentType(domain)
-                print(f"  → Executing {domain}...")
-
-                response = self.workflow_engine.execute_workflow(
-                    query, agent_type, True, context, session_id
-                )
-
-                results.append(
-                    {
-                        "agent": domain,
-                        "answer": response.answer,
-                        "metadata": response.metadata,
-                    }
-                )
-
-            except Exception as e:
-                print(f"  ❌ Error executing {domain}: {str(e)}")
-                continue
-
-        # Combine results into coherent response
-        combined_answer = self._combine_multi_domain_results(query, results)
-
-        return AgentResponse(answer=combined_answer)
-
-    def _combine_multi_domain_results(self, query: str, results: list) -> str:
-        """Combine multiple agent results into a coherent response"""
-        combination_prompt = self.prompts["multi_domain_combination"]
-
-        results_text = "\n\n".join(
-            [f"**{r['agent']}**:\n{r['answer']}" for r in results]
-        )
-
-        formatted_prompt = combination_prompt.format(query=query, results=results_text)
-
-        try:
-            return self.llm.invoke(formatted_prompt).content
-        except:
-            # Fallback: just concatenate results
-            return "\n\n---\n\n".join([r["answer"] for r in results])
+def handle_error_node(state: AgentGraphState) -> Dict[str, Any]:
+    """Handles errors reported by agent nodes."""
+    print("--- Handle Error Node ---")
+    error_msg = state.get("error_message", "An unspecified error occurred.")
+    messages = list(state.get("messages", []))
+    final_answer = f"I'm sorry, I encountered an error: {error_msg}. Please try rephrasing your request or contact support."
+    messages.append(AIMessage(content=final_answer))
+    return {"messages": messages, "final_answer": final_answer}

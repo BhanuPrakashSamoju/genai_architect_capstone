@@ -1,94 +1,122 @@
-"""
-Chat API endpoints with conversation memory management.
-"""
-
+# api/chat.py
+import time
+import uuid
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict
 from datetime import datetime
-import uuid
 
-from agents.supervisor import Supervisor  # ✅ Changed from SupervisorAgent
+# Import the compiled graph and state definition
+from agents.graph import app_graph
+from core.state import AgentGraphState # Use the state definition
+from langchain_core.messages import HumanMessage, BaseMessage, AIMessage
 
 router = APIRouter()
 
-# In-memory conversation storage (replace with Redis/DB in production)
-conversations: Dict[str, List[Dict]] = {}
+# --- Conversation Storage (Simple in-memory) ---
+conversations: Dict[str, List[Dict[str, Any]]] = {}
 
-# Initialize supervisor agent
-supervisor = Supervisor()  # ✅ Changed from SupervisorAgent()
-
-
+# --- Pydantic Models ---
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
 
-
 class ChatResponse(BaseModel):
     answer: str
     session_id: str
-    metadata: Optional[dict] = None
+    # metadata: Optional[Dict[str, Any]] = None # Keep if graph adds useful metadata
 
-
+# --- API Endpoints ---
 @router.post("/chat/", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Process chat message with conversation memory."""
-
-    # Create or retrieve session
+    """Processes chat message using the simplified LangGraph application."""
+    start_time = time.time()
     session_id = request.session_id or str(uuid.uuid4())
 
-    # Initialize conversation if new session
     if session_id not in conversations:
         conversations[session_id] = []
+        print(f"New session started: {session_id}")
 
-    # Add user message to history
-    conversations[session_id].append(
-        {
-            "role": "user",
-            "content": request.message,
-            "timestamp": datetime.now().isoformat(),
-        }
+    # Add user message to history *before* calling graph
+    user_message_record = {"role": "user", "content": request.message, "timestamp": datetime.now().isoformat()}
+    conversations[session_id].append(user_message_record)
+    print(f"Received: '{request.message[:100]}' (Session: {session_id})")
+
+    # --- Prepare Initial State ---
+    # Create context string from recent history (excluding current message)
+    history_limit = 5
+    recent_history = conversations[session_id][-(history_limit + 1):-1]
+    context_str = "\n".join([f"{msg['role'].title()}: {msg['content']}" for msg in recent_history]) or "No previous conversation history."
+
+    initial_state = AgentGraphState(
+        query=request.message,
+        context_str=context_str,
+        session_id=session_id,
+        messages=[HumanMessage(content=request.message)], # Start graph with only the user message
+        intent=None,
+        needs_customer_data=None,
+        customer_ids=None,
+        customer_data=None,
+        agent_outcome=None,
+        final_answer=None,
+        error_message=None,
+        multi_domain_agents=None
     )
 
-    print(f"Received chat request: {request.message} (session: {session_id})")
+    # --- Invoke LangGraph ---
+    try:
+        config = {"configurable": {"session_id": session_id}} # Pass session_id for potential persistence later
+        final_state = app_graph.invoke(initial_state, config=config)
 
-    # Get conversation context (last 5 messages)
-    context = "\n".join(
-        [f"{msg['role']}: {msg['content']}" for msg in conversations[session_id][-5:]]
-    )
+        # Extract final answer - should be in 'final_answer' or the last message
+        final_answer = final_state.get("final_answer")
+        if not final_answer and final_state.get("messages"):
+             last_message = final_state["messages"][-1]
+             if isinstance(last_message, AIMessage):
+                 final_answer = last_message.content
 
-    # Process with supervisor
-    response = supervisor.process(
-        query=request.message, context=context, session_id=session_id
-    )
+        # Default if no answer found
+        if not final_answer:
+            final_answer = "Sorry, I wasn't able to generate a response for that."
+            print("⚠️ Graph finished without a final_answer or AIMessage.")
 
-    # Add assistant response to history
-    conversations[session_id].append(
-        {
-            "role": "assistant",
-            "content": response.answer,
-            "timestamp": datetime.now().isoformat(),
-        }
-    )
+    except Exception as e:
+        print(f"❌ Error invoking LangGraph: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing request: {e}")
+
+    # --- Add Assistant Response to History ---
+    assistant_message_record = {"role": "assistant", "content": final_answer, "timestamp": datetime.now().isoformat()}
+    conversations[session_id].append(assistant_message_record)
+
+    # --- Return Response ---
+    end_time = time.time()
+    print(f"Responding (took {end_time - start_time:.2f}s): '{final_answer[:100]}...'")
 
     return ChatResponse(
-        answer=response.answer, session_id=session_id, metadata=response.metadata
+        answer=final_answer,
+        session_id=session_id,
+        # metadata= # Add metadata if needed from final_state
     )
 
-
-@router.get("/chat/history/{session_id}")
+# get_history and clear_history remain largely the same
+# ... [get_history and clear_history code from previous step] ...
+@router.get("/chat/history/{session_id}", response_model=List[Dict[str, Any]])
 async def get_history(session_id: str):
-    """Retrieve conversation history for a session."""
+    """Retrieve the conversation history for a given session ID."""
     if session_id not in conversations:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=f"Session ID '{session_id}' not found.")
+    return conversations[session_id]
 
-    return {"session_id": session_id, "messages": conversations[session_id]}
 
-
-@router.delete("/chat/history/{session_id}")
+@router.delete("/chat/history/{session_id}", status_code=200)
 async def clear_history(session_id: str):
-    """Clear conversation history for a session."""
+    """Clear the conversation history for a given session ID."""
     if session_id in conversations:
         del conversations[session_id]
-
-    return {"message": "History cleared", "session_id": session_id}
+        # Add logic here to clear LangGraph checkpoints if you implement persistence.
+        print(f"Cleared in-memory chat history for session ID: {session_id}")
+        return {"message": "Chat history cleared successfully.", "session_id": session_id}
+    else:
+        raise HTTPException(status_code=404, detail=f"Session ID '{session_id}' not found.")
