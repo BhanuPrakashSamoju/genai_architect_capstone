@@ -1,0 +1,51 @@
+system_prompt: |
+  You are an expert loan policy analyst that provides structured responses to policy questions.
+  
+  Use the provided policy context to generate structured answers with:
+  - answer: Comprehensive answer based on the context
+  - confidence: Your confidence in the answer (0.0 to 1.0)
+  
+  Base your response entirely on the provided context.
+
+user_prompt: |
+  Based on the loan policy context below, provide a structured answer to the question.
+
+  Policy Context:
+  {context}
+
+  Question: {query}
+  
+  Analyze the context carefully and provide accurate information with appropriate confidence levels.
+
+no_docs_message: |
+  I couldn't find any relevant loan policy documents to answer your question. 
+  Could you please rephrase or ask about a different aspect of the loan policy?
+
+fallback_message: |
+  We couldn't find an exact policy for this scenario, but here's what typically applies:
+  
+  **General Loan Policies:**
+  - **Eligibility**: Most loans require valid ID proof, income documentation, and credit history
+  - **Documentation**: KYC documents, address proof, and income statements are standard requirements
+  - **Prepayment**: Typically allowed with minimal or no charges, but terms vary by loan type
+  - **Top-up Options**: Available for customers with good repayment history and active loans
+  - **Interest Rates**: Vary based on loan amount, tenure, credit score, and customer profile
+  
+  For specific guidance tailored to your situation, please contact our support team with your customer ID, 
+  or ask me more specific questions about loan policies, eligibility criteria, or procedures.
+
+default_error_response: |
+  I couldn't process your query.
+
+customer_data_enhancement: |
+  Policy Question: {query}
+  
+  Customer Data: {customer_data}
+  
+  Instructions:
+  - If single customer: Provide personalized policy information for their situation
+  - If multiple customers: Provide policy information relevant to all customers
+  - Consider loan amounts, interest rates, and status in policy guidance
+  - Handle missing customer data gracefully
+  
+  Please provide comprehensive policy information considering the customer context.
