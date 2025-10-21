@@ -6,7 +6,6 @@ from typing import Optional, Dict, Any, List
 # Core components
 from core.llm_provider import get_llm
 from core.state import AgentGraphState
-from core.routing_models import AgentType # Use the Enum for type safety
 from core.constants import SUPERVISOR_ROUTING_CONFIDENCE_THRESHOLD
 from core.utils import fetch_customer_data, _extract_customer_ids_from_text # Import customer data utils
 from langchain_core.messages import AIMessage, HumanMessage

@@ -2,7 +2,7 @@
 import json
 import os
 import time
-from typing import Optional, List, Any, Dict, Union
+from typing import Optional, List, Any, Dict, Union, Tuple
 
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities import SQLDatabase

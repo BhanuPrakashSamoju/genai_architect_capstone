@@ -8,7 +8,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from core.state import AgentGraphState
 
 # Import node functions
-from agents.supervisor_agent import supervisor_router_node, fetch_data_node, handle_error_node
+from agents.supervisor import supervisor_router_node, fetch_data_node, handle_error_node
 from agents.sql_agent import sql_agent_node
 from agents.policy_guru import policy_guru_node
 from agents.calculator_agent import calculator_node

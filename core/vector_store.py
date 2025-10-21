@@ -1,7 +1,7 @@
 # core/vector_store.py
 import chromadb
 from langchain_chroma import Chroma
-from .constants import VECTOR_STORE_DIR, CHROMA_COLLECTION_NAME
+from .constants import VECTOR_STORE_DIR, CHROMA_COLLECTION_NAME, POLICY_SEARCH_K
 from .llm_provider import get_embedding_model
 
 _vector_store_instance = None

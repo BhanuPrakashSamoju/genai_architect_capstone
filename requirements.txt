@@ -1,11 +1,13 @@
 # requirements.txt (Example - adjust versions as needed)
-langchain~=0.1.0
-langchain-openai~=0.1.0 # Or specific version for Azure
-langgraph~=0.0.30 # Or latest
+langchain==0.3.27
+langgraph==0.6.7
+langchain-openai==0.3.33
+langchain-community==0.3.29
+pydantic==2.11.7
 fastapi~=0.110.0
 uvicorn[standard]~=0.27.0
 python-dotenv~=1.0.0
-chromadb~=0.4.22 # Or latest compatible
+chromadb # Or latest compatible
 pypdf~=4.0.0
 SQLAlchemy~=2.0.0 # For Langchain SQLDatabase
 numpy-financial~=1.0.0 # For calculator
@@ -13,4 +15,3 @@ tiktoken # Often needed by Langchain/OpenAI
 # Add any specific dependencies from your text2sql tools if not covered above
 numpy
 pandas # Often useful, add if needed by Text2SQL formatting
-# pydantic included transitively, but specify if needed
