@@ -1,0 +1,100 @@
+{
+  "loan_data": [
+    {
+      "name": "loan_id",
+      "dtype": "INTEGER",
+      "description": "Unique identifier for the loan.  This is the primary key for the loan_data table.  Use this to identify a specific loan.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [2001, 2002, 2003]
+    },
+    {
+      "name": "customer_id",
+      "dtype": "INTEGER",
+      "description": "Unique identifier for the customer.  Links to customer's personal information (not available in this database).",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [1900, 1881, 1251]
+    },
+    {
+      "name": "loan_amount",
+      "dtype": "REAL",
+      "description": "The original principal amount of the loan in INR.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [50000.0, 30000.0, 75000.0]
+    },
+    {
+      "name": "interest_rate",
+      "dtype": "REAL",
+      "description": "The annual interest rate for the loan, expressed as a percentage.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [13.5, 11.5, 12.0]
+    },
+    {
+      "name": "start_date",
+      "dtype": "DATE",
+      "description": "The date when the loan was disbursed to the customer.  Format is YYYY-MM-DD.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": ["2023-02-08", "2022-08-11", "2024-02-13"]
+    },
+    {
+      "name": "tenure_months",
+      "dtype": "INTEGER",
+      "description": "The total duration of the loan in months.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [18, 12, 24]
+    },
+    {
+      "name": "monthly_emi",
+      "dtype": "REAL",
+      "description": "The fixed amount the customer must pay each month towards the loan.  This includes both principal and interest.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [3084.06, 2686.56, 1405.21]
+    },
+    {
+      "name": "amount_paid",
+      "dtype": "REAL",
+      "description": "The total amount the customer has paid towards the loan to date.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [55513.08, 32238.72, 22483.36]
+    },
+    {
+      "name": "next_due_date",
+      "dtype": "TEXT",
+      "description": "The date when the next EMI payment is due.  If null, the loan is likely closed. Format is YYYY-MM-DD.",
+      "nullable": true,
+      "unique_count": null,
+      "sample_values": [null, "2025-07-07", "2025-07-21"]
+    },
+    {
+      "name": "status",
+      "dtype": "TEXT",
+      "description": "The current status of the loan.  Possible values include 'Active' (loan is ongoing) and 'Closed' (loan is fully repaid).",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": ["Closed", "Active"]
+    },
+    {
+      "name": "topup_eligible",
+      "dtype": "INTEGER",
+      "description": "A flag indicating whether the customer is eligible for a top-up loan. 1 indicates eligible, 0 indicates not eligible.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [0, 1]
+    },
+    {
+      "name": "prepayment_limit",
+      "dtype": "REAL",
+      "description": "The maximum amount the customer is allowed to prepay on their loan.  This may be subject to policy restrictions.",
+      "nullable": false,
+      "unique_count": null,
+      "sample_values": [0.0, 10000.0, 20000.0]
+    }
+  ]
+}

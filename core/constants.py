@@ -15,7 +15,7 @@ DATASET_DIR = BASE_DIR / "dataset"
 VECTOR_STORE_DIR = DATABASE_DIR / "vector_store"
 LOAN_DB_PATH = DATABASE_DIR / "loan_data" / "LoanDB_BlueLoans4all.sqlite"
 SQLITE_DB_URI = f"sqlite:///{LOAN_DB_PATH}"
-DB_METADATA_PATH = BASE_DIR / "data" / "metadata.json" # If still needed by Text2SQL
+DB_METADATA_PATH = BASE_DIR / "database" / "loan_data" / "metadata.json" # If still needed by Text2SQL
 POLICY_DOCS_DIR = DATASET_DIR / "policy_docs"
 
 # --- Azure OpenAI Credentials (Chat LLM) ---
