@@ -1,0 +1,12 @@
+INFO:     Started server process [42714]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+✅ Set sys.pycache_prefix to: /workspaces/genai_architect_capstone/.pycache
+✅ Loaded environment variables from: /workspaces/genai_architect_capstone/.env
+✅ Simple LangGraph application compiled.
+Could not draw graph (requires graphviz): Install pygraphviz to draw graphs: `pip install pygraphviz`.
+🚀 Loan Navigator API starting up...
+✅ API ready.

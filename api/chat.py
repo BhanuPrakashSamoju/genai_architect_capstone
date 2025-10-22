@@ -2,16 +2,47 @@
 import time
 import uuid
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from api.auth import authenticate
 from datetime import datetime
 
 # Import the compiled graph and state definition
 from agents.graph import app_graph
 from core.state import AgentGraphState # Use the state definition
 from langchain_core.messages import HumanMessage, BaseMessage, AIMessage
+import sqlite3
+import os
+from core.constants import BASE_DIR
+import bcrypt
+import jwt
 
 router = APIRouter()
+
+# Paths
+USER_DB = os.path.join(BASE_DIR, 'database', 'customer_data', 'loan_user_db.sqlite')
+JWT_SECRET_FILE = os.path.join(BASE_DIR, 'database', 'customer_data', '.jwt_secret')
+
+
+def _load_jwt_secret():
+    if os.path.exists(JWT_SECRET_FILE):
+        with open(JWT_SECRET_FILE, 'r') as fh:
+            return fh.read().strip()
+    return None
+
+
+def _get_user_by_username(username: str):
+    try:
+        with sqlite3.connect(USER_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute('SELECT * FROM customer_data WHERE user_name = ? LIMIT 1', (username,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        print(f"Error querying user DB: {e}")
+        return None
+
 
 # --- Conversation Storage (Simple in-memory) ---
 conversations: Dict[str, List[Dict[str, Any]]] = {}
@@ -20,6 +51,13 @@ conversations: Dict[str, List[Dict[str, Any]]] = {}
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    # Optional customer_id (admin can act on behalf of a customer)
+    customer_id: Optional[int] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 class ChatResponse(BaseModel):
     answer: str
@@ -28,7 +66,7 @@ class ChatResponse(BaseModel):
 
 # --- API Endpoints ---
 @router.post("/chat/", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, ctx: dict = Depends(authenticate)):
     """Processes chat message using the simplified LangGraph application."""
     start_time = time.time()
     session_id = request.session_id or str(uuid.uuid4())
@@ -48,6 +86,20 @@ async def chat(request: ChatRequest):
     recent_history = conversations[session_id][-(history_limit + 1):-1]
     context_str = "\n".join([f"{msg['role'].title()}: {msg['content']}" for msg in recent_history]) or "No previous conversation history."
 
+    # Attach user context based on auth
+    caller_role = ctx.get('role')
+    caller_sub = ctx.get('sub')
+
+    # If admin provided customer_id override, use that for customer-scoped operations
+    acting_customer_ids = None
+    if caller_role == 'admin' and request.customer_id:
+        acting_customer_ids = [request.customer_id]
+    elif caller_role == 'user':
+        try:
+            acting_customer_ids = [int(caller_sub)]
+        except Exception:
+            acting_customer_ids = None
+
     initial_state = AgentGraphState(
         query=request.message,
         context_str=context_str,
@@ -55,7 +107,7 @@ async def chat(request: ChatRequest):
         messages=[HumanMessage(content=request.message)], # Start graph with only the user message
         intent=None,
         needs_customer_data=None,
-        customer_ids=None,
+        customer_ids=acting_customer_ids,
         customer_data=None,
         agent_outcome=None,
         final_answer=None,
@@ -99,6 +151,82 @@ async def chat(request: ChatRequest):
         session_id=session_id,
         # metadata= # Add metadata if needed from final_state
     )
+
+
+@router.post('/auth/login')
+async def login(credentials: LoginRequest):
+    """Username/password exchange for JWT token."""
+    username = credentials.username
+    password = credentials.password or ''
+    # Look up user
+    user = _get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+
+    stored_hash = user.get('password_hash')
+    if not stored_hash:
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+
+    # stored_hash comes from sqlite as bytes; ensure proper type
+    if isinstance(stored_hash, str):
+        stored_hash = stored_hash.encode('utf-8')
+
+    if not bcrypt.checkpw(password.encode('utf-8'), stored_hash):
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+
+    # Load secret and issue token
+    secret = _load_jwt_secret()
+    if not secret:
+        raise HTTPException(status_code=500, detail='Server misconfiguration: JWT secret missing')
+
+    import datetime
+    payload = {
+        'sub': str(user.get('customer_id')),
+        'iat': int(datetime.datetime.utcnow().timestamp()),
+        'exp': int((datetime.datetime.utcnow() + datetime.timedelta(days=30)).timestamp())
+    }
+    token = jwt.encode(payload, secret, algorithm='HS256')
+    return {'token': token, 'user': {'customer_id': user.get('customer_id'), 'user_name': user.get('user_name')}}
+
+
+@router.get('/admin/users')
+async def admin_list_users(ctx: dict = Depends(authenticate)):
+    """Return list of users for admin. Admin-only endpoint."""
+    if ctx.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail='Admin access required')
+    try:
+        with sqlite3.connect(USER_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute('SELECT customer_id, user_name, email, created_at FROM customer_data')
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error listing users: {e}")
+        raise HTTPException(status_code=500, detail='Error listing users')
+
+
+@router.get('/customer/loans')
+async def customer_loans(customer_id: Optional[int] = None, ctx: dict = Depends(authenticate)):
+    """Return loans for the authenticated user (role=user) or for admin if customer_id is provided."""
+    # Determine acting customer
+    if ctx.get('role') == 'user':
+        cid = ctx.get('sub')
+    else:
+        # Admin can provide customer_id as query param
+        cid = customer_id
+
+    if not cid:
+        return []
+
+    # Use the existing fetch_customer_data util
+    from core.utils import fetch_customer_data
+    try:
+        data = fetch_customer_data([int(cid)])
+        return data
+    except Exception as e:
+        print(f"Error fetching loans: {e}")
+        raise HTTPException(status_code=500, detail='Error fetching loans')
 
 # get_history and clear_history remain largely the same
 # ... [get_history and clear_history code from previous step] ...
